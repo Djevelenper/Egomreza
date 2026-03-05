@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Heart, 
@@ -20,49 +20,95 @@ import {
   Camera
 } from "lucide-react";
 
-interface Status {
-  id: number;
-  userId: number;
-  firstName: string;
-  lastName: string;
-  avatar: string;
-  content: string;
-  imageUrl: string | null;
-  repostOfId: number | null;
-  quoteText: string | null;
-  likes: number;
-  dislikes: number;
-  repostsCount: number;
-  myInteraction: "like" | "dislike" | "repost" | null;
-  createdAt: string;
-  origFirstName?: string;
-  origLastName?: string;
-  origContent?: string;
-  origImageUrl?: string | null;
-}
+// --- Types ---
 
 interface User {
   id: number;
   firstName: string;
   lastName: string;
   avatar: string;
+  bio: string;
 }
 
+interface Status {
+  id: number;
+  userId: number;
+  content: string;
+  imageUrl: string | null;
+  repostOfId: number | null;
+  quoteText: string | null;
+  createdAt: string;
+}
+
+interface Interaction {
+  id: number;
+  userId: number;
+  statusId: number;
+  type: "like" | "dislike" | "repost";
+}
+
+interface Follow {
+  followerId: number;
+  followingId: number;
+}
+
+interface Comment {
+  id: number;
+  userId: number;
+  statusId: number;
+  content: string;
+  createdAt: string;
+}
+
+interface Notification {
+  id: number;
+  userId: number;
+  fromUserId: number;
+  type: "like" | "dislike" | "repost" | "follow" | "comment";
+  createdAt: string;
+}
+
+// --- Initial Data ---
+
+const INITIAL_USERS: User[] = [
+  { id: 1, firstName: "Ego", lastName: "Admin", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Admin", bio: "The creator of the Ego Network." },
+  { id: 2, firstName: "Jane", lastName: "Doe", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Jane", bio: "Just a human being." }
+];
+
+const INITIAL_STATUSES: Status[] = [
+  { id: 1, userId: 1, content: "Welcome to EGO. No bots, no filters, just raw human interaction.", imageUrl: null, repostOfId: null, quoteText: null, createdAt: new Date().toISOString() }
+];
+
+// --- App Component ---
+
 export default function App() {
+  // --- Persistence ---
+  const [users, setUsers] = useState<User[]>(() => JSON.parse(localStorage.getItem("ego_users") || JSON.stringify(INITIAL_USERS)));
+  const [statuses, setStatuses] = useState<Status[]>(() => JSON.parse(localStorage.getItem("ego_statuses") || JSON.stringify(INITIAL_STATUSES)));
+  const [interactions, setInteractions] = useState<Interaction[]>(() => JSON.parse(localStorage.getItem("ego_interactions") || "[]"));
+  const [follows, setFollows] = useState<Follow[]>(() => JSON.parse(localStorage.getItem("ego_follows") || "[]"));
+  const [comments, setComments] = useState<Comment[]>(() => JSON.parse(localStorage.getItem("ego_comments") || "[]"));
+  const [notifications, setNotifications] = useState<Notification[]>(() => JSON.parse(localStorage.getItem("ego_notifications") || "[]"));
+
   const [userId, setUserId] = useState<number | null>(() => {
     const saved = localStorage.getItem("ego_user_id");
     return saved ? parseInt(saved) : null;
   });
-  const [me, setMe] = useState<User | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem("ego_users", JSON.stringify(users));
+    localStorage.setItem("ego_statuses", JSON.stringify(statuses));
+    localStorage.setItem("ego_interactions", JSON.stringify(interactions));
+    localStorage.setItem("ego_follows", JSON.stringify(follows));
+    localStorage.setItem("ego_comments", JSON.stringify(comments));
+    localStorage.setItem("ego_notifications", JSON.stringify(notifications));
+  }, [users, statuses, interactions, follows, comments, notifications]);
+
+  // --- UI State ---
   const [activeTab, setActiveTab] = useState<"suggested" | "following" | "global">("global");
   const [currentView, setCurrentView] = useState<"feed" | "explore" | "notifications" | "profile">("feed");
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
-  const [profileUser, setProfileUser] = useState<User | any>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [suggestedUsers, setSuggestedUsers] = useState<any[]>([]);
-  const [statuses, setStatuses] = useState<Status[]>([]);
-  const [loading, setLoading] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
   const [regForm, setRegForm] = useState({ firstName: "", lastName: "", avatar: "", bio: "" });
   const [newPost, setNewPost] = useState("");
@@ -70,212 +116,202 @@ export default function App() {
   const [showImageInput, setShowImageInput] = useState(false);
   const [quotePost, setQuotePost] = useState<Status | null>(null);
   const [expandedComments, setExpandedComments] = useState<number | null>(null);
-  const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState("");
-
-  const apiFetch = async (url: string, options: any = {}) => {
-    const headers = {
-      ...options.headers,
-      "Content-Type": "application/json",
-      "x-user-id": userId?.toString() || "",
-    };
-    return fetch(url, { ...options, headers });
-  };
-
-  const fetchMe = async () => {
-    if (!userId) return;
-    try {
-      const res = await apiFetch("/api/me");
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        if (data) setMe(data);
-        else throw new Error("Invalid user data");
-      } else {
-        setUserId(null);
-        localStorage.removeItem("ego_user_id");
-      }
-    } catch (e) {
-      console.error("Me fetch error:", e);
-      setUserId(null);
-      localStorage.removeItem("ego_user_id");
-    }
-  };
-
-  const fetchFeed = async () => {
-    if (!userId || currentView !== "feed") return;
-    try {
-      setLoading(true);
-      const res = await apiFetch(`/api/feed/${activeTab}`);
-      if (!res.ok) throw new Error("Failed to fetch feed");
-      const data = await res.json();
-      setStatuses(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Feed fetch error:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchProfile = async (id: number) => {
-    try {
-      setLoading(true);
-      const [uRes, sRes] = await Promise.all([
-        apiFetch(`/api/users/${id}`),
-        apiFetch(`/api/users/${id}/statuses`)
-      ]);
-      if (uRes.ok) setProfileUser(await uRes.json());
-      if (sRes.ok) setStatuses(await sRes.json());
-    } catch (e) {
-      console.error("Profile fetch error:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchNotifications = async () => {
-    try {
-      setLoading(true);
-      const res = await apiFetch("/api/notifications");
-      if (res.ok) setNotifications(await res.json());
-    } catch (e) {
-      console.error("Notifications fetch error:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchSuggestedUsers = async () => {
-    try {
-      const res = await apiFetch("/api/users/suggested");
-      if (res.ok) setSuggestedUsers(await res.json());
-    } catch (e) {
-      console.error("Suggested users error:", e);
-    }
-  };
-
-  const handleSearch = async (q: string) => {
-    if (!q.trim()) return;
-    try {
-      setLoading(true);
-      const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}`);
-      if (res.ok) setStatuses(await res.json());
-    } catch (e) {
-      console.error("Search error:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    if (userId) {
-      fetchMe();
-      fetchSuggestedUsers();
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    
-    if (currentView === "feed") fetchFeed();
-    else if (currentView === "notifications") fetchNotifications();
-    else if (currentView === "profile" && selectedProfileId) fetchProfile(selectedProfileId);
-    
-    const interval = setInterval(() => {
-      if (currentView === "feed") fetchFeed();
-      else if (currentView === "notifications") fetchNotifications();
-      else if (currentView === "profile" && selectedProfileId) fetchProfile(selectedProfileId);
-    }, 10000);
-    
+    const interval = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(interval);
-  }, [userId, activeTab, currentView, selectedProfileId]);
+  }, []);
 
-  const fetchComments = async (statusId: number) => {
-    try {
-      const res = await apiFetch(`/api/comments/${statusId}`);
-      if (!res.ok) throw new Error("Failed to fetch comments");
-      const data = await res.json();
-      setComments(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Comments fetch error:", e);
-      setComments([]);
-    }
-  };
+  const me = useMemo(() => users.find(u => u.id === userId), [users, userId]);
 
-  const handleComment = async (statusId: number) => {
-    if (!newComment.trim()) return;
-    const res = await apiFetch("/api/comments", {
-      method: "POST",
-      body: JSON.stringify({ statusId, content: newComment }),
-    });
-    if (res.ok) {
-      setNewComment("");
-      fetchComments(statusId);
-    } else {
-      const err = await res.json().catch(() => ({ error: "Failed to comment" }));
-      alert(err.error || "Failed to comment");
-    }
-  };
+  // --- Derived Data ---
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const avatar = regForm.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${regForm.firstName}${regForm.lastName}`;
-      const res = await fetch("/api/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...regForm, avatar }),
-      });
+  const enrichedStatuses = useMemo(() => {
+    const now = new Date().getTime();
+    return statuses
+      .filter(s => {
+        const created = new Date(s.createdAt).getTime();
+        return (now - created) < 180000; // 3 minutes
+      })
+      .map(s => {
+      const user = users.find(u => u.id === s.userId);
+      const sInteractions = interactions.filter(i => i.statusId === s.id);
+      const myInteraction = interactions.find(i => i.statusId === s.id && i.userId === userId);
       
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Registration failed" }));
-        alert(err.error || "Registration failed");
-        return;
+      let origStatus = null;
+      let origUser = null;
+      if (s.repostOfId) {
+        origStatus = statuses.find(os => os.id === s.repostOfId);
+        if (origStatus) {
+          origUser = users.find(u => u.id === origStatus.userId);
+        }
       }
-      
-      const data = await res.json();
-      localStorage.setItem("ego_user_id", data.id.toString());
-      setUserId(data.id);
-      setIsRegistering(false);
-    } catch (e) {
-      console.error("Registration error:", e);
-      alert("An unexpected error occurred during registration.");
+
+      return {
+        ...s,
+        firstName: user?.firstName || "Unknown",
+        lastName: user?.lastName || "User",
+        avatar: user?.avatar || "",
+        likes: sInteractions.filter(i => i.type === "like").length,
+        dislikes: sInteractions.filter(i => i.type === "dislike").length,
+        repostsCount: sInteractions.filter(i => i.type === "repost").length,
+        myInteraction: myInteraction?.type || null,
+        origFirstName: origUser?.firstName,
+        origLastName: origUser?.lastName,
+        origContent: origStatus?.content,
+        origImageUrl: origStatus?.imageUrl
+      };
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [statuses, users, interactions, userId, tick]);
+
+  const filteredStatuses = useMemo(() => {
+    if (currentView === "profile" && selectedProfileId) {
+      return enrichedStatuses.filter(s => s.userId === selectedProfileId);
     }
+    if (currentView === "explore" && searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return enrichedStatuses.filter(s => s.content.toLowerCase().includes(q) || s.firstName.toLowerCase().includes(q) || s.lastName.toLowerCase().includes(q));
+    }
+    if (activeTab === "following" && userId) {
+      const followingIds = follows.filter(f => f.followerId === userId).map(f => f.followingId);
+      return enrichedStatuses.filter(s => followingIds.includes(s.userId) || s.userId === userId);
+    }
+    if (activeTab === "suggested" && userId) {
+      // Simple suggestion: users you don't follow
+      const followingIds = follows.filter(f => f.followerId === userId).map(f => f.followingId);
+      return enrichedStatuses.filter(s => !followingIds.includes(s.userId) && s.userId !== userId);
+    }
+    return enrichedStatuses;
+  }, [enrichedStatuses, currentView, selectedProfileId, searchQuery, activeTab, userId, follows]);
+
+  const enrichedNotifications = useMemo(() => {
+    return notifications
+      .filter(n => n.userId === userId)
+      .map(n => {
+        const fromUser = users.find(u => u.id === n.fromUserId);
+        return { ...n, firstName: fromUser?.firstName, lastName: fromUser?.lastName, avatar: fromUser?.avatar };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [notifications, userId, users]);
+
+  const suggestedUsers = useMemo(() => {
+    if (!userId) return [];
+    const followingIds = follows.filter(f => f.followerId === userId).map(f => f.followingId);
+    return users.filter(u => u.id !== userId && !followingIds.includes(u.id)).slice(0, 5);
+  }, [users, userId, follows]);
+
+  const profileUser = useMemo(() => {
+    if (!selectedProfileId) return null;
+    const u = users.find(u => u.id === selectedProfileId);
+    if (!u) return null;
+    const followers = follows.filter(f => f.followingId === u.id).length;
+    const following = follows.filter(f => f.followerId === u.id).length;
+    return { ...u, followersCount: followers, followingCount: following };
+  }, [users, selectedProfileId, follows]);
+
+  // --- Actions ---
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newId = users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1;
+    const avatar = regForm.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${regForm.firstName}${regForm.lastName}`;
+    const newUser: User = { id: newId, ...regForm, avatar };
+    setUsers([...users, newUser]);
+    setUserId(newId);
+    localStorage.setItem("ego_user_id", newId.toString());
+    setIsRegistering(false);
   };
 
-  const handlePost = async () => {
+  const handlePost = () => {
+    if (!userId) return;
     if (!newPost.trim() && !quotePost && !newPostImage) return;
-    await apiFetch("/api/statuses", {
-      method: "POST",
-      body: JSON.stringify({
-        content: newPost,
-        repostOfId: quotePost?.id || null,
-        quoteText: quotePost ? newPost : null,
-        imageUrl: newPostImage || null
-      }),
-    });
+    
+    const newId = statuses.length > 0 ? Math.max(...statuses.map(s => s.id)) + 1 : 1;
+    const s: Status = {
+      id: newId,
+      userId,
+      content: newPost,
+      repostOfId: quotePost?.id || null,
+      quoteText: quotePost ? newPost : null,
+      imageUrl: newPostImage || null,
+      createdAt: new Date().toISOString()
+    };
+    
+    setStatuses([s, ...statuses]);
     setNewPost("");
     setNewPostImage("");
     setShowImageInput(false);
     setQuotePost(null);
-    fetchFeed();
   };
 
-  const handleInteraction = async (statusId: number, type: "like" | "dislike" | "repost") => {
-    await apiFetch("/api/interactions", {
-      method: "POST",
-      body: JSON.stringify({ statusId, type }),
-    });
-    fetchFeed();
+  const handleInteraction = (statusId: number, type: "like" | "dislike" | "repost") => {
+    if (!userId) return;
+    
+    const existing = interactions.find(i => i.statusId === statusId && i.userId === userId && i.type === type);
+    if (existing) {
+      setInteractions(interactions.filter(i => i.id !== existing.id));
+      return;
+    }
+
+    // Remove other interactions of same user on same status if it's like/dislike
+    let newInteractions = interactions;
+    if (type === "like" || type === "dislike") {
+      newInteractions = interactions.filter(i => !(i.statusId === statusId && i.userId === userId && (i.type === "like" || i.type === "dislike")));
+    }
+
+    const newId = interactions.length > 0 ? Math.max(...interactions.map(i => i.id)) + 1 : 1;
+    const interaction: Interaction = { id: newId, userId, statusId, type };
+    setInteractions([...newInteractions, interaction]);
+
+    // Notification
+    const status = statuses.find(s => s.id === statusId);
+    if (status && status.userId !== userId) {
+      const nId = notifications.length > 0 ? Math.max(...notifications.map(n => n.id)) + 1 : 1;
+      setNotifications([{ id: nId, userId: status.userId, fromUserId: userId, type, createdAt: new Date().toISOString() }, ...notifications]);
+    }
   };
 
-  const handleFollow = async (userIdToFollow: number) => {
-    await apiFetch("/api/follow", {
-      method: "POST",
-      body: JSON.stringify({ userId: userIdToFollow }),
-    });
-    if (currentView === "feed") fetchFeed();
-    if (currentView === "profile" && selectedProfileId) fetchProfile(selectedProfileId);
+  const handleFollow = (targetId: number) => {
+    if (!userId || userId === targetId) return;
+    const existing = follows.find(f => f.followerId === userId && f.followingId === targetId);
+    if (existing) {
+      setFollows(follows.filter(f => !(f.followerId === userId && f.followingId === targetId)));
+    } else {
+      setFollows([...follows, { followerId: userId, followingId: targetId }]);
+      const nId = notifications.length > 0 ? Math.max(...notifications.map(n => n.id)) + 1 : 1;
+      setNotifications([{ id: nId, userId: targetId, fromUserId: userId, type: "follow", createdAt: new Date().toISOString() }, ...notifications]);
+    }
   };
+
+  const handleComment = (statusId: number) => {
+    if (!userId || !newComment.trim()) return;
+    const newId = comments.length > 0 ? Math.max(...comments.map(c => c.id)) + 1 : 1;
+    const c: Comment = { id: newId, userId, statusId, content: newComment, createdAt: new Date().toISOString() };
+    setComments([...comments, c]);
+    setNewComment("");
+
+    // Notification
+    const status = statuses.find(s => s.id === statusId);
+    if (status && status.userId !== userId) {
+      const nId = notifications.length > 0 ? Math.max(...notifications.map(n => n.id)) + 1 : 1;
+      setNotifications([{ id: nId, userId: status.userId, fromUserId: userId, type: "comment", createdAt: new Date().toISOString() }, ...notifications]);
+    }
+  };
+
+  const statusComments = useMemo(() => {
+    if (!expandedComments) return [];
+    return comments
+      .filter(c => c.statusId === expandedComments)
+      .map(c => {
+        const user = users.find(u => u.id === c.userId);
+        return { ...c, firstName: user?.firstName, lastName: user?.lastName, avatar: user?.avatar };
+      })
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [comments, expandedComments, users]);
+
+  // --- Render Helpers ---
 
   if (!userId && !isRegistering) {
     return (
@@ -467,7 +503,7 @@ export default function App() {
                         <button onClick={() => setQuotePost(null)} className="absolute top-2 right-2 text-[#999] hover:text-black">
                           <X size={16} />
                         </button>
-                        <p className="text-xs font-bold text-[#999] mb-1 uppercase tracking-widest">Quoting {quotePost.firstName}</p>
+                        <p className="text-xs font-bold text-[#999] mb-1 uppercase tracking-widest">Quoting {quotePost.userId === userId ? "yourself" : "someone"}</p>
                         <p className="text-sm line-clamp-2">{quotePost.content}</p>
                       </div>
                     )}
@@ -518,18 +554,14 @@ export default function App() {
                   placeholder="Search EGO..."
                   className="w-full bg-[#F5F5F5] border-none rounded-full py-4 pl-12 pr-6 focus:ring-2 focus:ring-black outline-none transition-all"
                   value={searchQuery}
-                  onChange={e => {
-                    setSearchQuery(e.target.value);
-                    if (!e.target.value) fetchFeed(); // Reset to global if empty
-                  }}
-                  onKeyDown={e => e.key === 'Enter' && handleSearch(searchQuery)}
+                  onChange={e => setSearchQuery(e.target.value)}
                 />
               </div>
               
               {searchQuery ? (
                 <div className="mb-8">
                   <h2 className="text-xl font-bold mb-6">Search results for "{searchQuery}"</h2>
-                  {statuses.length === 0 && !loading && (
+                  {filteredStatuses.length === 0 && (
                     <p className="text-[#999] text-center py-12">No results found.</p>
                   )}
                 </div>
@@ -537,9 +569,9 @@ export default function App() {
                 <>
                   <h2 className="text-xl font-bold mb-6">Trending for you</h2>
                   <div className="space-y-6 mb-12">
-                    <TrendItem title="Minimalism" posts="2.4k" onClick={() => { setSearchQuery("Minimalism"); handleSearch("Minimalism"); }} />
-                    <TrendItem title="EGO Network" posts="1.1k" onClick={() => { setSearchQuery("EGO Network"); handleSearch("EGO Network"); }} />
-                    <TrendItem title="Architecture" posts="842" onClick={() => { setSearchQuery("Architecture"); handleSearch("Architecture"); }} />
+                    <TrendItem title="Minimalism" posts="2.4k" onClick={() => setSearchQuery("Minimalism")} />
+                    <TrendItem title="EGO Network" posts="1.1k" onClick={() => setSearchQuery("EGO Network")} />
+                    <TrendItem title="Architecture" posts="842" onClick={() => setSearchQuery("Architecture")} />
                   </div>
                 </>
               )}
@@ -551,12 +583,12 @@ export default function App() {
               <header className="p-6 sticky top-0 bg-white/80 backdrop-blur-xl border-b border-[#EEE] z-10">
                 <h2 className="text-xl font-bold">Notifications</h2>
               </header>
-              {notifications.length === 0 ? (
+              {enrichedNotifications.length === 0 ? (
                 <div className="p-12 text-center text-[#999]">
                   <p>No notifications yet.</p>
                 </div>
               ) : (
-                notifications.map(n => (
+                enrichedNotifications.map(n => (
                   <div key={n.id} className="p-6 flex gap-4 hover:bg-[#FAFAFA] transition-colors cursor-pointer">
                     <div className="mt-1">
                       {n.type === 'like' && <Heart size={20} className="text-red-500 fill-red-500" />}
@@ -592,7 +624,7 @@ export default function App() {
                 </button>
                 <div>
                   <h2 className="text-xl font-bold">{profileUser.firstName} {profileUser.lastName}</h2>
-                  <p className="text-xs text-[#999] font-bold uppercase tracking-widest">{statuses.length} posts</p>
+                  <p className="text-xs text-[#999] font-bold uppercase tracking-widest">{filteredStatuses.length} posts</p>
                 </div>
               </header>
               <div className="relative">
@@ -604,7 +636,7 @@ export default function App() {
                       onClick={() => handleFollow(profileUser.id)}
                       className="bg-black text-white px-6 py-2 rounded-full font-bold text-sm hover:bg-[#333] transition-all"
                     >
-                      Follow
+                      {follows.find(f => f.followerId === userId && f.followingId === profileUser.id) ? "Unfollow" : "Follow"}
                     </button>
                   )}
                 </div>
@@ -629,169 +661,164 @@ export default function App() {
           {/* Feed List */}
           {(currentView === "feed" || currentView === "profile" || currentView === "explore") && (
             <div className="divide-y divide-[#EEE]">
-              {loading ? (
-                <div className="flex justify-center py-20">
-                  <RefreshCw className="animate-spin text-[#EEE]" size={32} />
-                </div>
-              ) : (
-                <AnimatePresence mode="popLayout">
-                  {statuses.map((status) => (
-                    <motion.article
-                      key={status.id}
-                      layout
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="p-6 hover:bg-[#FAFAFA] transition-colors group"
-                    >
-                      <div className="flex gap-4">
-                        <img 
-                          src={status.avatar} 
-                          className="w-12 h-12 rounded-full bg-[#F5F5F5] cursor-pointer" 
-                          alt={status.firstName} 
-                          onClick={() => {
-                            setSelectedProfileId(status.userId);
-                            setCurrentView("profile");
-                          }}
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span 
-                              className="font-bold hover:underline cursor-pointer"
-                              onClick={() => {
-                                setSelectedProfileId(status.userId);
-                                setCurrentView("profile");
-                              }}
-                            >
-                              {status.firstName} {status.lastName}
-                            </span>
-                            <span className="text-[#999] text-[10px] bg-[#F5F5F5] px-2 py-0.5 rounded-full font-mono uppercase tracking-tighter">
-                              <Countdown date={status.createdAt} />
-                            </span>
+              <AnimatePresence mode="popLayout">
+                {filteredStatuses.map((status) => (
+                  <motion.article
+                    key={status.id}
+                    layout
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="p-6 hover:bg-[#FAFAFA] transition-colors group"
+                  >
+                    <div className="flex gap-4">
+                      <img 
+                        src={status.avatar} 
+                        className="w-12 h-12 rounded-full bg-[#F5F5F5] cursor-pointer" 
+                        alt={status.firstName} 
+                        onClick={() => {
+                          setSelectedProfileId(status.userId);
+                          setCurrentView("profile");
+                        }}
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span 
+                            className="font-bold hover:underline cursor-pointer"
+                            onClick={() => {
+                              setSelectedProfileId(status.userId);
+                              setCurrentView("profile");
+                            }}
+                          >
+                            {status.firstName} {status.lastName}
+                          </span>
+                          <span className="text-[#999] text-[10px] bg-[#F5F5F5] px-2 py-0.5 rounded-full font-mono uppercase tracking-tighter">
+                            <Countdown date={status.createdAt} />
+                          </span>
+                          {status.userId !== userId && (
                             <button 
                               onClick={() => handleFollow(status.userId)}
                               className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] font-bold uppercase tracking-widest text-[#999] hover:text-black transition-all"
                             >
-                              Follow
+                              {follows.find(f => f.followerId === userId && f.followingId === status.userId) ? "Unfollow" : "Follow"}
                             </button>
+                          )}
+                        </div>
+                        
+                        <p className="text-[16px] leading-relaxed mb-4 text-[#333]">
+                          {status.content}
+                        </p>
+
+                        {status.imageUrl && (
+                          <div className="mb-4 rounded-2xl overflow-hidden border border-[#EEE]">
+                            <img src={status.imageUrl} className="w-full h-auto max-h-[400px] object-cover" alt="" referrerPolicy="no-referrer" />
                           </div>
+                        )}
+
+                        {status.repostOfId && (
+                          <div className="mb-4 p-4 rounded-2xl border border-[#EEE] bg-white">
+                            <p className="text-xs font-bold text-[#999] mb-2 uppercase tracking-widest">{status.origFirstName} {status.origLastName}</p>
+                            <p className="text-sm text-[#666] mb-2">{status.origContent}</p>
+                            {status.origImageUrl && (
+                              <img src={status.origImageUrl} className="w-full h-auto max-h-[200px] object-cover rounded-xl" alt="" referrerPolicy="no-referrer" />
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex justify-between max-w-sm text-[#999]">
+                          <button 
+                            onClick={() => {
+                              if (expandedComments === status.id) {
+                                setExpandedComments(null);
+                              } else {
+                                setExpandedComments(status.id);
+                              }
+                            }}
+                            className="flex items-center gap-2 hover:text-black transition-colors"
+                          >
+                            <MessageCircle size={18} />
+                            <span className="text-xs font-bold">Comments</span>
+                          </button>
                           
-                          <p className="text-[16px] leading-relaxed mb-4 text-[#333]">
-                            {status.content}
-                          </p>
+                          <button 
+                            onClick={() => handleInteraction(status.id, "repost")}
+                            className={`flex items-center gap-2 transition-colors ${status.myInteraction === 'repost' ? 'text-black' : 'hover:text-black'}`}
+                          >
+                            <Repeat2 size={18} />
+                            <span className="text-xs font-bold">{status.repostsCount}</span>
+                          </button>
 
-                          {status.imageUrl && (
-                            <div className="mb-4 rounded-2xl overflow-hidden border border-[#EEE]">
-                              <img src={status.imageUrl} className="w-full h-auto max-h-[400px] object-cover" alt="" referrerPolicy="no-referrer" />
-                            </div>
-                          )}
+                          <button 
+                            onClick={() => handleInteraction(status.id, "like")}
+                            className={`flex items-center gap-2 transition-colors ${status.myInteraction === "like" ? "text-black" : "hover:text-black"}`}
+                          >
+                            <Heart size={18} className={status.myInteraction === "like" ? "fill-black" : ""} />
+                            <span className="text-xs font-bold">{status.likes}</span>
+                          </button>
 
-                          {status.repostOfId && (
-                            <div className="mb-4 p-4 rounded-2xl border border-[#EEE] bg-white">
-                              <p className="text-xs font-bold text-[#999] mb-2 uppercase tracking-widest">{status.origFirstName} {status.origLastName}</p>
-                              <p className="text-sm text-[#666] mb-2">{status.origContent}</p>
-                              {status.origImageUrl && (
-                                <img src={status.origImageUrl} className="w-full h-auto max-h-[200px] object-cover rounded-xl" alt="" referrerPolicy="no-referrer" />
-                              )}
-                            </div>
-                          )}
+                          <button 
+                            onClick={() => handleInteraction(status.id, "dislike")}
+                            className={`flex items-center gap-2 transition-colors ${status.myInteraction === "dislike" ? "text-black" : "hover:text-black"}`}
+                          >
+                            <ThumbsDown size={18} className={status.myInteraction === "dislike" ? "fill-black" : ""} />
+                            <span className="text-xs font-bold">{status.dislikes}</span>
+                          </button>
+                        </div>
 
-                          <div className="flex justify-between max-w-sm text-[#999]">
-                            <button 
-                              onClick={() => {
-                                if (expandedComments === status.id) {
-                                  setExpandedComments(null);
-                                } else {
-                                  setExpandedComments(status.id);
-                                  fetchComments(status.id);
-                                }
-                              }}
-                              className="flex items-center gap-2 hover:text-black transition-colors"
-                            >
-                              <MessageCircle size={18} />
-                              <span className="text-xs font-bold">Comments</span>
-                            </button>
-                            
-                            <button 
-                              onClick={() => setQuotePost(status)}
-                              className={`flex items-center gap-2 transition-colors ${status.myInteraction === 'repost' ? 'text-black' : 'hover:text-black'}`}
-                            >
-                              <Repeat2 size={18} />
-                              <span className="text-xs font-bold">{status.repostsCount}</span>
-                            </button>
-
-                            <button 
-                              onClick={() => handleInteraction(status.id, "like")}
-                              className={`flex items-center gap-2 transition-colors ${status.myInteraction === "like" ? "text-black" : "hover:text-black"}`}
-                            >
-                              <Heart size={18} className={status.myInteraction === "like" ? "fill-black" : ""} />
-                              <span className="text-xs font-bold">{status.likes}</span>
-                            </button>
-
-                            <button 
-                              onClick={() => handleInteraction(status.id, "dislike")}
-                              className={`flex items-center gap-2 transition-colors ${status.myInteraction === "dislike" ? "text-black" : "hover:text-black"}`}
-                            >
-                              <ThumbsDown size={18} className={status.myInteraction === "dislike" ? "fill-black" : ""} />
-                              <span className="text-xs font-bold">{status.dislikes}</span>
-                            </button>
-                          </div>
-
-                          {expandedComments === status.id && (
-                            <div className="mt-6 pt-6 border-t border-[#F5F5F5] space-y-4">
-                              <div className="flex gap-3">
-                                <img src={me?.avatar} className="w-8 h-8 rounded-full bg-[#EEE]" alt="Me" />
-                                <div className="flex-1 flex gap-2">
-                                  <input 
-                                    placeholder="Add a comment..."
-                                    className="flex-1 bg-[#F9F9F9] border-none rounded-full px-4 py-2 text-sm outline-none focus:ring-1 focus:ring-black"
-                                    value={newComment}
-                                    onChange={e => setNewComment(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && handleComment(status.id)}
-                                  />
-                                  <button 
-                                    onClick={() => handleComment(status.id)}
-                                    className="text-xs font-bold uppercase tracking-widest hover:text-black"
-                                  >
-                                    Send
-                                  </button>
-                                </div>
+                        {expandedComments === status.id && (
+                          <div className="mt-6 pt-6 border-t border-[#F5F5F5] space-y-4">
+                            <div className="flex gap-3">
+                              <img src={me?.avatar} className="w-8 h-8 rounded-full bg-[#EEE]" alt="Me" />
+                              <div className="flex-1 flex gap-2">
+                                <input 
+                                  placeholder="Add a comment..."
+                                  className="flex-1 bg-[#F9F9F9] border-none rounded-full px-4 py-2 text-sm outline-none focus:ring-1 focus:ring-black"
+                                  value={newComment}
+                                  onChange={e => setNewComment(e.target.value)}
+                                  onKeyDown={e => e.key === 'Enter' && handleComment(status.id)}
+                                />
+                                <button 
+                                  onClick={() => handleComment(status.id)}
+                                  className="text-xs font-bold uppercase tracking-widest hover:text-black"
+                                >
+                                  Send
+                                </button>
                               </div>
-                              
-                              <div className="space-y-4">
-                                {comments.map((comment: any) => (
-                                  <div key={comment.id} className="flex gap-3">
-                                    <img 
-                                      src={comment.avatar} 
-                                      className="w-8 h-8 rounded-full bg-[#EEE] cursor-pointer" 
-                                      alt="User" 
+                            </div>
+                            
+                            <div className="space-y-4">
+                              {statusComments.map((comment: any) => (
+                                <div key={comment.id} className="flex gap-3">
+                                  <img 
+                                    src={comment.avatar} 
+                                    className="w-8 h-8 rounded-full bg-[#EEE] cursor-pointer" 
+                                    alt="User" 
+                                    onClick={() => {
+                                      setSelectedProfileId(comment.userId);
+                                      setCurrentView("profile");
+                                    }}
+                                  />
+                                  <div className="flex-1">
+                                    <p 
+                                      className="text-xs font-bold cursor-pointer hover:underline"
                                       onClick={() => {
                                         setSelectedProfileId(comment.userId);
                                         setCurrentView("profile");
                                       }}
-                                    />
-                                    <div className="flex-1">
-                                      <p 
-                                        className="text-xs font-bold cursor-pointer hover:underline"
-                                        onClick={() => {
-                                          setSelectedProfileId(comment.userId);
-                                          setCurrentView("profile");
-                                        }}
-                                      >
-                                        {comment.firstName} {comment.lastName}
-                                      </p>
-                                      <p className="text-sm text-[#666]">{comment.content}</p>
-                                    </div>
+                                    >
+                                      {comment.firstName} {comment.lastName}
+                                    </p>
+                                    <p className="text-sm text-[#666]">{comment.content}</p>
                                   </div>
-                                ))}
-                              </div>
+                                </div>
+                              ))}
                             </div>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
-                    </motion.article>
-                  ))}
-                </AnimatePresence>
-              )}
+                    </div>
+                  </motion.article>
+                ))}
+              </AnimatePresence>
             </div>
           )}
         </main>
@@ -801,9 +828,9 @@ export default function App() {
           <div className="bg-white p-6 rounded-3xl border border-[#EEE]">
             <h3 className="text-sm font-bold uppercase tracking-widest mb-4">Trending</h3>
             <div className="space-y-4">
-              <TrendItem title="Minimalism" posts="2.4k" onClick={() => { setSearchQuery("Minimalism"); setCurrentView("explore"); handleSearch("Minimalism"); }} />
-              <TrendItem title="EGO Network" posts="1.1k" onClick={() => { setSearchQuery("EGO Network"); setCurrentView("explore"); handleSearch("EGO Network"); }} />
-              <TrendItem title="Architecture" posts="842" onClick={() => { setSearchQuery("Architecture"); setCurrentView("explore"); handleSearch("Architecture"); }} />
+              <TrendItem title="Minimalism" posts="2.4k" onClick={() => { setSearchQuery("Minimalism"); setCurrentView("explore"); }} />
+              <TrendItem title="EGO Network" posts="1.1k" onClick={() => { setSearchQuery("EGO Network"); setCurrentView("explore"); }} />
+              <TrendItem title="Architecture" posts="842" onClick={() => { setSearchQuery("Architecture"); setCurrentView("explore"); }} />
             </div>
           </div>
 
@@ -880,7 +907,7 @@ function Countdown({ date }: { date: string }) {
 
   useEffect(() => {
     const update = () => {
-      const created = new Date(date + " UTC").getTime();
+      const created = new Date(date).getTime();
       const now = new Date().getTime();
       const diff = 180000 - (now - created); // 3 minutes in ms
 
